@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query, File, UploadFile
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 from typing import List
@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from pymongo import MongoClient
 from bson import ObjectId
+import uvicorn
 
 app = FastAPI()
 
@@ -248,113 +249,62 @@ def update_contact(contact_id: str, contact: ContactUpdate) -> Contact:
             return Contact(**contacts[idx])
     return None
 
-def delete_contact(contact_id: str) -> bool:
+def delete_contact(contact_id: str):
     contacts = read_csv_contacts()
-    new_contacts = [contact for contact in contacts if contact["id"] != contact_id]
-    if len(new_contacts) != len(contacts):
-        write_csv_contacts(new_contacts)
-        return True
-    return False
+    contacts = [c for c in contacts if c["id"] != contact_id]
+    write_csv_contacts(contacts)
+    return {"detail": "Contact deleted"}
 
-# Routes for contacts
 @app.post("/contacts/", response_model=Contact)
-def create_contact_route(contact: ContactCreate):
+async def create_contact_endpoint(contact: ContactCreate):
     return create_contact(contact)
 
 @app.get("/contacts/", response_model=List[Contact])
-def read_contacts_route():
+async def list_contacts():
     return get_contacts()
 
 @app.get("/contacts/{contact_id}", response_model=Contact)
-def read_contact_route(contact_id: str):
+async def get_contact_endpoint(contact_id: str):
     contact = get_contact(contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
+    if contact:
+        return contact
+    raise HTTPException(status_code=404, detail="Contact not found")
 
 @app.put("/contacts/{contact_id}", response_model=Contact)
-def update_contact_route(contact_id: str, contact: ContactUpdate):
+async def update_contact_endpoint(contact_id: str, contact: ContactUpdate):
     updated_contact = update_contact(contact_id, contact)
-    if updated_contact is None:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return updated_contact
+    if updated_contact:
+        return updated_contact
+    raise HTTPException(status_code=404, detail="Contact not found")
 
 @app.delete("/contacts/{contact_id}")
-def delete_contact_route(contact_id: str):
-    success = delete_contact(contact_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Contact not found")
+async def delete_contact_endpoint(contact_id: str):
+    delete_contact(contact_id)
     return {"detail": "Contact deleted"}
 
+# Directorio para videos
+VIDEO_DIRECTORY = "./static/videos"
+os.makedirs(VIDEO_DIRECTORY, exist_ok=True)
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-import os
-from typing import List
+@app.post("/videos/upload")
+async def upload_video(video: UploadFile = File(...)):
+    file_location = f"{VIDEO_DIRECTORY}/{video.filename}"
+    with open(file_location, "wb") as file:
+        shutil.copyfileobj(video.file, file)
+    return {"info": f"file '{video.filename}' saved at '{file_location}'"}
 
+@app.get("/videos/")
+async def list_videos():
+    videos = [f for f in os.listdir(VIDEO_DIRECTORY) if os.path.isfile(os.path.join(VIDEO_DIRECTORY, f))]
+    return {"videos": videos}
 
-
-UPLOAD_DIR = 'static/videos'
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
-
-# Video model
-class Video(BaseModel):
-    id: int
-    title: str
-    filename: str
-
-# In-memory "database"
-videos = []
-
-@app.post("/videos/", response_model=Video)
-async def create_video(title: str = Form(...), video: UploadFile = File(...)):
-    video_id = len(videos) + 1
-    file_path = os.path.join(UPLOAD_DIR, video.filename)
-    with open(file_path, "wb") as buffer:
-        buffer.write(await video.read())
-    
-    new_video = Video(id=video_id, title=title, filename=video.filename)
-    videos.append(new_video)
-    return new_video
-
-@app.get("/videos/", response_model=List[Video])
-async def get_videos():
-    return videos
-
-@app.get("/videos/{video_id}", response_class=FileResponse)
-async def get_video(video_id: int):
-    video = next((v for v in videos if v.id == video_id), None)
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    return os.path.join(UPLOAD_DIR, video.filename)
-
-@app.put("/videos/{video_id}", response_model=Video)
-async def update_video(video_id: int, title: str = Form(...), video: UploadFile = File(None)):
-    video_to_update = next((v for v in videos if v.id == video_id), None)
-    if not video_to_update:
-        raise HTTPException(status_code=404, detail="Video not found")
-    
-    if video:
-        file_path = os.path.join(UPLOAD_DIR, video.filename)
-        with open(file_path, "wb") as buffer:
-            buffer.write(await video.read())
-        video_to_update.filename = video.filename
-    
-    video_to_update.title = title
-    return video_to_update
-
-@app.delete("/videos/{video_id}", response_model=Video)
-async def delete_video(video_id: int):
-    global videos
-    video_to_delete = next((v for v in videos if v.id == video_id), None)
-    if not video_to_delete:
-        raise HTTPException(status_code=404, detail="Video not found")
-    
-    file_path = os.path.join(UPLOAD_DIR, video_to_delete.filename)
+@app.delete("/videos/{filename}")
+async def delete_video(filename: str):
+    file_path = os.path.join(VIDEO_DIRECTORY, filename)
     if os.path.exists(file_path):
         os.remove(file_path)
-    
-    videos = [v for v in videos if v.id != video_id]
-    return video_to_delete
+        return {"detail": "Video deleted"}
+    raise HTTPException(status_code=404, detail="Video not found")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
