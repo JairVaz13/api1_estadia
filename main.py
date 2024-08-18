@@ -120,58 +120,6 @@ async def exportar_eventos_csv():
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=eventos.csv"})
 
-# Configuración de MongoDB
-client = MongoClient("mongodb://localhost:27017/")
-db = client.image_database
-image_collection = db.images
-
-# Directorio para subir imágenes
-UPLOAD_DIRECTORY = "./uploads"
-os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
-
-# Montar el directorio de uploads para servir archivos estáticos
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIRECTORY), name="uploads")
-
-@app.post("/upload")
-async def upload_image(image: UploadFile = File(...)):
-    file_location = f"{UPLOAD_DIRECTORY}/{image.filename}"
-    with open(file_location, "wb") as file:
-        shutil.copyfileobj(image.file, file)
-
-    result = image_collection.insert_one({"url": f"/uploads/{image.filename}"})
-    return JSONResponse({"success": True, "imageUrl": f"/uploads/{image.filename}", "id": str(result.inserted_id)})
-
-@app.get("/images")
-async def get_images():
-    images = image_collection.find()
-    image_urls = []
-    for img in images:
-        if "url" in img:
-            image_urls.append({"url": img["url"], "id": str(img["_id"])})
-    return JSONResponse({"images": image_urls})
-
-@app.delete("/images/{image_id}")
-async def delete_image(image_id: str):
-    # Validar el formato del ID
-    try:
-        object_id = ObjectId(image_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid image ID")
-
-    # Buscar la imagen en la base de datos
-    image = image_collection.find_one({"_id": object_id})
-    if not image:
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    # Eliminar el archivo de la carpeta uploads
-    file_path = os.path.join(UPLOAD_DIRECTORY, image["url"].split('/')[-1])
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
-    # Eliminar la entrada de la base de datos
-    image_collection.delete_one({"_id": object_id})
-
-    return JSONResponse({"success": True})
 
 # Archivo CSV para almacenar contactos
 CSV_FILE = Path("contacts.csv")
@@ -360,3 +308,40 @@ async def delete_video(video_id: int):
     return video_to_delete
 
 
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+import os
+import shutil
+
+
+# Directorio para subir imágenes
+UPLOAD_DIRECTORY = "./uploads"
+os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+
+# Montar el directorio de uploads para servir archivos estáticos
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIRECTORY), name="uploads")
+
+@app.post("/upload")
+async def upload_image(image: UploadFile = File(...)):
+    file_location = f"{UPLOAD_DIRECTORY}/{image.filename}"
+    with open(file_location, "wb") as file:
+        shutil.copyfileobj(image.file, file)
+
+    return JSONResponse({"success": True, "imageUrl": f"/uploads/{image.filename}"})
+
+@app.get("/images")
+async def get_images():
+    # Obtener una lista de los archivos en el directorio de uploads
+    image_urls = [{"url": f"/uploads/{filename}"} for filename in os.listdir(UPLOAD_DIRECTORY)]
+    return JSONResponse({"images": image_urls})
+
+@app.delete("/images/{image_name}")
+async def delete_image(image_name: str):
+    file_path = os.path.join(UPLOAD_DIRECTORY, image_name)
+    
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return JSONResponse({"success": True})
+    else:
+        raise HTTPException(status_code=404, detail="Image not found")
